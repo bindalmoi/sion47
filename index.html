@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>시온시티 47 - 달심 엔진</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Noto Sans KR', sans-serif; background: #87CEEB; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        .hud-panel { position: absolute; bottom: 20px; left: 20px; color: white; text-shadow: 1px 1px 2px black; pointer-events: auto; }
+        .hud-title { font-size: 1.5rem; font-weight: bold; margin-bottom: 10px; }
+        .status-box { background: rgba(0,0,0,0.6); padding: 15px; border-radius: 10px; min-width: 250px; }
+        
+        #modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 100; justify-content: center; align-items: center;
+            pointer-events: auto;
+        }
+        .modal-content {
+            background: white; padding: 30px; border-radius: 15px; text-align: center; max-width: 500px;
+            box-shadow: 0 0 20px rgba(255,255,255,0.5);
+        }
+        .modal-btn {
+            background: #007bff; color: white; border: none; padding: 10px 20px; 
+            border-radius: 5px; cursor: pointer; font-size: 1rem; margin-top: 10px;
+        }
+        .modal-btn:hover { background: #0056b3; }
+        .price-tag { font-size: 1.2rem; color: #d32f2f; font-weight: bold; }
+        
+        /* 달알 스타일 */
+        .moon-avatar { position: absolute; top: 20px; right: 20px; width: 80px; height: 80px; transition: all 0.3s; }
+    </style>
+    <!-- Three.js & OrbitControls -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="ui-layer">
+    <div class="hud-panel">
+        <div class="status-box">
+            <div class="hud-title">시온시티 47</div>
+            <p>📍 용인 구성역 | 동백신봉선 | 언남역 예정지</p>
+            <p>👤 화신: <strong>달알</strong> (상태: 기쁨)</p>
+            <p>💰 현금 보유: <span id="cash-display">35,000,000</span> 원</p>
+            <p>🔗 초대 링크: <a href="#" style="color:#4fc3f7">siwon47.kr/부름</a></p>
+            <p style="font-size:0.8em; color:#aaa;">클릭하여 동호수를 선택하세요.</p>
+        </div>
+    </div>
+    
+    <!-- 달알 (Avatar) -->
+    <div id="moon-avatar" class="moon-avatar">
+        <!-- SVG로 간단한 달알 표현 -->
+        <svg viewBox="0 0 100 100">
+            <circle cx="50" cy="50" r="45" fill="#F4F6F0" stroke="#333" stroke-width="2"/>
+            <circle cx="35" cy="40" r="8" fill="#333"/>
+            <circle cx="65" cy="40" r="8" fill="#333"/>
+            <path d="M 35 60 Q 50 70 65 60" stroke="#333" stroke-width="3" fill="none"/>
+        </svg>
+    </div>
+</div>
+
+<!-- 계약 모달 -->
+<div id="modal-overlay">
+    <div class="modal-content">
+        <h2 id="modal-title">동호수 선택</h2>
+        <p id="modal-info">원하는 타입을 선택해주세요.</p>
+        <div id="type-selector" style="display:flex; gap:10px; justify-content:center; margin:20px 0;">
+            <button class="modal-btn" onclick="selectType('A')">A 타입 (59㎡)</button>
+            <button class="modal-btn" onclick="selectType('B')">B 타입 (84㎡)</button>
+        </div>
+        <div id="price-area" style="display:none; margin-bottom:15px;">
+            <p>선택한 타입: <span id="selected-type"></span></p>
+            <p>가격: <span class="price-tag"><span id="room-price">0</span> 원</span></p>
+            <p>수수료 (계약 성공): <strong>6,500,000 원</strong></p>
+        </div>
+        <button id="contract-btn" class="modal-btn" style="background:#28a745; display:none;" onclick="executeContract()">계약하기</button>
+        <button class="modal-btn" onclick="closeModal()" style="background:#6c757d;">취소</button>
+    </div>
+</div>
+
+<script>
+    // --- 달심 엔진 초기화 (Three.js + WASM Ready) ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x87CEEB); // 푸른 하늘
+    scene.fog = new THREE.Fog(0x87CEEB, 20, 100);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 15, 50);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.5;
+    controls.maxPolarAngle = Math.PI / 2 - 0.1; // 땅 밑으로 안 보이기
+
+    // 조명
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(50, 100, 50);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // --- 배경 환경: 구름과 땅 ---
+    function createCloud(x, y, z, scale) {
+        const geo = new THREE.SphereGeometry(scale, 8, 8);
+        const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+        const cloud = new THREE.Mesh(geo, mat);
+        cloud.position.set(x, y, z);
+        scene.add(cloud);
+        return cloud;
+    }
+    const clouds = [];
+    for(let i=0; i<20; i++) {
+        clouds.push(createCloud(
+            (Math.random()-0.5)*100, 
+            20 + Math.random()*10, 
+            (Math.random()-0.5)*100, 
+            2 + Math.random()*3
+        ));
+    }
+
+    // 땅 (구간)
+    const groundGeo = new THREE.PlaneGeometry(200, 200);
+    const groundMat = new THREE.MeshLambertMaterial({ color: 0x4caf50 });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -1;
+    scene.add(ground);
+
+    // --- 주요 객체: 시온시티 47 아파트 3 동의 모델 (단순화) ---
+    const buildingGroup = new THREE.Group();
+    const buildingHeight = 30;
+    const buildingWidth = 4;
+    const floors = 30;
+
+    function createApartmentBlock(index) {
+        const x = index * 5;
+        const geo = new THREE.BoxGeometry(buildingWidth, buildingHeight, buildingWidth);
+        const mat = new THREE.MeshPhongMaterial({ color: 0xeeeeee });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(x, buildingHeight/2 - 1, 0);
+        mesh.castShadow = true;
+        
+        // 발코니 및 창문 효과 (색상 점綴)
+        const winGeo = new THREE.BoxGeometry(buildingWidth+0.2, buildingHeight+0.2, buildingWidth+0.2);
+        const winMat = new THREE.MeshBasicMaterial({ color: 0xcccccc, wireframe: true });
+        const winMesh = new THREE.Mesh(winGeo, winMat);
+        mesh.add(winMesh);
+
+        // 각 아파트에 데이터 부여
+        mesh.userData = { name: `시온시티 ${index+1}동`, type: 'apartment' };
+        buildingGroup.add(mesh);
+        return mesh;
+    }
+
+    for(let i=-1; i<=1; i++) {
+        createApartmentBlock(i); // -1, 0, 1 => 3 동의 구조
+    }
+
+    buildingGroup.position.z = -10;
+    scene.add(buildingGroup);
+
+    // --- 인터랙션 (Raycaster) ---
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let selectedBuilding = null;
+    let isModalOpen = false;
+
+    window.addEventListener('click', onMouseClick, false);
+
+    function onMouseClick(event) {
+        if (isModalOpen) return;
+        
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(buildingGroup.children);
+
+        if (intersects.length > 0) {
+            selectedBuilding = intersects[0].object;
+            openModal(selectedBuilding.userData.name);
+        } else {
+            // 배경 클릭 시 카메라 리셋 등 처리
+            controls.autoRotate = true;
+        }
+    }
+
+    // --- UI 로직 ---
+    const modalEl = document.getElementById('modal-overlay');
+    const titleEl = document.getElementById('modal-title');
+    const infoEl = document.getElementById('modal-info');
+    const priceArea = document.getElementById('price-area');
+    const contractBtn = document.getElementById('contract-btn');
+
+    function openModal(buildName) {
+        isModalOpen = true;
+        controls.autoRotate = false;
+        modalEl.style.display = 'flex';
+        titleEl.textContent = `${buildName} 동호수 선택`;
+        infoEl.textContent = "원하는 평형을 선택해주세요.";
+        priceArea.style.display = 'none';
+        contractBtn.style.display = 'none';
+        document.getElementById('type-selector').style.display = 'flex';
+    }
+
+    function closeModal() {
+        isModalOpen = false;
+        modalEl.style.display = 'none';
+        controls.autoRotate = true;
+    }
+
+    function selectType(type) {
+        const price = type === 'A' ? 35000000 : 65000000; // 예시 가격
+        const typeName = type === 'A' ? '59㎡ A 타입' : '84㎡ B 타입';
+        
+        document.getElementById('selected-type').textContent = typeName;
+        document.getElementById('room-price').textContent = price.toLocaleString();
+        
+        document.getElementById('type-selector').style.display = 'none';
+        priceArea.style.display = 'block';
+        contractBtn.style.display = 'inline-block';
+    }
+
+    function executeContract() {
+        alert("축하합니다! 계약이 완료되었습니다.\n수수료 650 만원이 발생되며, 초대자는 보상을 받습니다.");
+        closeModal();
+        // 실제 로직: 서버 전송, 블록체인 기록 등
+    }
+
+    // --- 애니메이션 루프 ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // 구름 이동 (바람 효과)
+        clouds.forEach((cloud, idx) => {
+            cloud.position.x += 0.02 + (idx % 3) * 0.01;
+            if (cloud.position.x > 60) cloud.position.x = -60;
+            cloud.position.y += Math.sin(Date.now() * 0.001 + idx) * 0.02; // 위아래 흔들림
+        });
+
+        // 달알 감정 변화 (무작위)
+        const avatar = document.querySelector('.moon-avatar svg path');
+        if (Math.random() < 0.01) {
+            const faces = [
+                { d: "M 35 60 Q 50 70 65 60", mood: "기쁨" },
+                { d: "M 35 60 Q 50 40 65 60", mood: "놀라움" },
+                { d: "M 30 60 L 70 60", mood: "평온" }
+            ];
+            const f = faces[Math.floor(Math.random() * faces.length)];
+            avatar.setAttribute('d', f.d);
+            console.log(`달알 감정: ${f.mood}`);
+        }
+
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    // 윈도우 리사이즈
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+</script>
+</body>
+</html>
